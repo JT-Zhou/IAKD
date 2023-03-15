@@ -7,17 +7,15 @@ from .FitNet import FitNet
 from .KDSVD import KDSVD
 from .CRD import CRD
 from .NST import NST
-from .PKT_n import PKT
+from .PKT import PKT
 from .SP import SP
-from .VID_IA import VID
+from .VID import VID
 from .IAKD import IAKD
 from .DKD import DKD
-from .KD_n import KD
+from .KD import KD
 from .WSL import WSL
-from .ICKD import ICKD
-from .ReviewKD1 import ReviewKD
+from .ReviewKD import ReviewKD
 from .AN import AN
-from .SimKD import SimKD
 
 distiller_dict = {
     "NONE": Vanilla,
@@ -39,5 +37,4 @@ distiller_dict = {
     "ICKD":ICKD,
     "REVIEWKD":ReviewKD,
     "AN":AN,
-    "SimKD":SimKD
 }

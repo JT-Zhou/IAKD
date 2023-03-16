@@ -21,7 +21,7 @@
   # you can also change settings at command line
   python3 train.py --cfg configs/cifar100/IAKD/wrn40_2_res8x4.yaml SOLVER.BATCH_SIZE 128 SOLVER.LR 0.1
   ```
-  2. Training on ImageNet
+2. Training on ImageNet
 
 - Download the dataset at <https://image-net.org/> and put them to `./data/imagenet`
 

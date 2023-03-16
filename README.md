@@ -30,5 +30,5 @@
   python3 train.py --cfg configs/imagenet/r34_r18/iakd.yaml
   ```
   
-  ### Acknowledgement
+### Acknowledgement
   Thanks for DKD and ReviewKD. We build this library based on the [DKD's codebase](https://github.com/megvii-research/mdistiller) and the [ReviewKD's codebase](https://github.com/dvlab-research/ReviewKD).

@@ -20,52 +20,17 @@ def ce_loss(hid, target):
     return L
 
 
-def _get_gt_mask(logits, target):
-    target = target.reshape(-1)
-    mask = torch.zeros_like(logits).scatter_(1, target.unsqueeze(1), 1).bool()
-    return mask
-
-
-def _get_other_mask(logits, target):
-    target = target.reshape(-1)
-    mask = torch.ones_like(logits).scatter_(1, target.unsqueeze(1), 0).bool()
-    return mask
-
-
-def cat_mask(t, mask1, mask2):
-    t1 = (t * mask1).sum(dim=1, keepdims=True)
-    t2 = (t * mask2).sum(1, keepdims=True)
-    rt = torch.cat([t1, t2], dim=1)
-    return rt
-
-
-def kd_loss(logits_student, logits_teacher, f_s, f_t, idx, epc, target, CL, T_MAX, T_MIN, Reduce, pt_s):
-    T_max = 9
-    T_min = 6
-    alpha = 0
-    # sm = [0, 0.04, 0.06, 0.08, 0.1]
-    if epc > 25 and epc <= 50:
-        alpha = 25 / 240
-    elif epc > 50 and epc <= 75:
-        alpha = 50 / 240
-    elif epc > 75 and epc <= 100:
-        alpha = 75 / 240
-    elif epc > 100 and epc <= 240:
-        alpha = 100 / 240
-    T_min = (1 - alpha) * T_min
-    T_max = (1 - alpha) * T_max
-    tmp = []
+def kd_loss(logits_student, logits_teacher, f_s, f_t, idx, alpha, target, CL, T_MAX, T_MIN, Reduce):
+    T_max = T_MAX
+    T_min = T_MIN
+    T_min = Reduce*(1 - alpha) * T_min
+    T_max = Reduce*(1 - alpha) * T_max
     if T_min < 2:
         T_min = 2
     if T_max < 2:
         T_max = 2
-    logprobs = F.log_softmax(logits_student, dim=1)
 
-    target = F.one_hot(target, 100)  # 转换成one-hot
-    pt = 1 - pt_s
-    target = target.float()
     CL_S = []
-    beta = []
     T = []
 
     for i in range(len(idx)):
@@ -100,27 +65,28 @@ def kd_loss(logits_student, logits_teacher, f_s, f_t, idx, epc, target, CL, T_MA
         loss_all = loss_all + loss
     loss_kd = F.kl_div(log_pred_student, pred_teacher, reduction="none").sum(1)
     loss = loss_kd
-    tmp = torch.tensor(tmp).cuda(non_blocking=True)
-    loss_kd = torch.mul(loss_kd, T).mean() / 1.0
+    loss_kd = torch.mul(loss_kd, T).mean()
     loss_all = loss_all * (CL_S + 1)
     return loss_kd, loss, loss_all
 
 
 class IAKD(Distiller):
-    def __init__(self, student, teacher, cfg, dim):
+    def __init__(self, student, teacher, cfg):
         super(IAKD, self).__init__(student, teacher)
-        self.shapes = dim[0]  # cfg.REVIEWKD.SHAPES
-        self.out_shapes = dim[1]  # cfg.REVIEWKD.OUT_SHAPES
-        in_channels = dim[2]  # cfg.REVIEWKD.IN_CHANNELS
-        out_channels = dim[3]  # cfg.REVIEWKD.OUT_CHANNELS
-        self.T_MAX = cfg.KD_.T_MAX
-        self.T_MIN = cfg.KD_.T_MIN
-        self.Reduce = cfg.KD_.Reduce
-        self.ce_loss_weight = cfg.REVIEWKD.CE_WEIGHT
-        self.reviewkd_loss_weight = cfg.REVIEWKD.REVIEWKD_WEIGHT
-        self.warmup_epochs = cfg.REVIEWKD.WARMUP_EPOCHS
-        self.stu_preact = cfg.REVIEWKD.STU_PREACT
-        self.max_mid_channel = cfg.REVIEWKD.MAX_MID_CHANNEL
+        self.shapes = cfg.IAKD.SHAPES
+        self.out_shapes = cfg.IAKD.OUT_SHAPES
+        in_channels = cfg.IAKD.IN_CHANNELS
+        out_channels = cfg.IAKD.OUT_CHANNELS
+        self.T_MAX = cfg.IAKD.T_MAX
+        self.T_MIN = cfg.IAKD.T_MIN
+        self.Reduce = cfg.IAKD.Reduce
+        self.ce_loss_weight = cfg.IAKD.CE_WEIGHT
+        self.kd_loss_weight = cfg.IAKD.KD_WEIGHT
+        self.feature_loss_weight = cfg.IAKD.FeatureKD_WEIGHT
+        self.warmup_epochs = cfg.IAKD.WARMUP_EPOCHS
+        self.stu_preact = cfg.IAKD.STU_PREACT
+        self.max_mid_channel = cfg.IAKD.MAX_MID_CHANNEL
+        self.TYPE = cfg.DATASET.TYPE
         abfs = nn.ModuleList()
         mid_channel = min(512, in_channels[-1])
         for idx, in_channel in enumerate(in_channels):
@@ -147,18 +113,32 @@ class IAKD(Distiller):
         logits_student, features_student = self.student(image)
         with torch.no_grad():
             logits_teacher, features_teacher = self.teacher(image)
-
         index = kwargs['index']
         epc = kwargs['epc']
         ten = kwargs['ten']
+        alpha = 0
+        if self.TYPE == 'imagenet':
+            if epc > 10 and epc <= 15:
+                alpha = 15 / 100
+            elif epc > 15 and epc <= 20:
+                alpha = 20 / 100
+            elif epc > 25:
+                alpha = 25 / 100
+        else:
+            if epc > 25 and epc <= 50:
+                alpha = 25 / 240
+            elif epc > 50 and epc <= 75:
+                alpha = 50 / 240
+            elif epc > 75 and epc <= 100:
+                alpha = 75 / 240
+            elif epc > 100 and epc <= 240:
+                alpha = 100 / 240
+
         ind_ = list(index)
         ind = []
         for i in ind_:
             ind.append(int(i))
         loss_student_ce = ce_loss(logits_student, target)
-
-        a = 1
-        b = 2 * min(kwargs["epc"] / 20, 2)
 
         logprobs = F.log_softmax(logits_student, dim=1)
         tmp_target = target.view(-1, 1)
@@ -187,20 +167,21 @@ class IAKD(Distiller):
 
         # losses
         loss_kd, loss_student, loss_all = kd_loss(
-            logits_student, logits_teacher, results, features_teacher, ind, epc, target, ten, self.T_MAX, self.T_MIN,
-            self.Reduce, pt_s
+            logits_student, logits_teacher, results, features_teacher, ind, alpha, target, ten, self.T_MAX, self.T_MIN,
+            self.Reduce
         )
-        if epc in [1, 25, 50, 75, 100, 125]:
-            # l_kd_ = list(l_kd_each)
+        change_time = [1, 25, 50, 75, 100, 125]
+        if self.TYPE == 'imagenet':
+            change_time = [1,10,15,20]
+        if epc in change_time:
             for i in range(len(loss_student)):
-                ten[ind[i], 0] = loss_student[i] + loss_student_ce[
-                    i]  # self.ce_loss_weight*loss_student[i]+self.kd_loss_weight*float(l_kd_[i])
-                ten[ind[i], 1] = 1 - pt_s[i]
+                ten[ind[i], 0] = loss_student[i]
+                ten[ind[i], 1] = loss_student_ce[i]
 
         losses_dict = {
-            "loss_ce": a * F.cross_entropy(logits_student, target),
-            "loss_kd": b * loss_kd,
-            "loss_rekd": 7
+            "loss_ce": self.ce_loss_weight * F.cross_entropy(logits_student, target),
+            "loss_kd": self.kd_loss_weight * min(kwargs["epc"] / 20, 2) * loss_kd,
+            "loss_rekd": self.feature_loss_weight
                          * min(kwargs["epoch"] / self.warmup_epochs, 2.0)
                          * loss_all
         }
@@ -246,3 +227,26 @@ class ABF(nn.Module):
             x = F.interpolate(x, (out_shape, out_shape), mode="nearest")
         y = self.conv2(x)
         return y, x
+if __name__ == '__main__':
+    import argparse
+    #from ..models.imagenet import MobileNetV2,resnet
+    from ..models.imagenet import imagenet_model_dict
+    from yacs.config import CfgNode as CN
+    from ..engine.cfg import CFG as cfg
+    parser = argparse.ArgumentParser("training for knowledge distillation.")
+    parser.add_argument("--cfg", type=str, default=r"G:\Python Prog\github\IAKD\configs\imagenet\r34_r18\iakd.yaml")
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("opts", default=None, nargs=argparse.REMAINDER)
+
+    args = parser.parse_args()
+    cfg.merge_from_file(args.cfg)
+    cfg.merge_from_list(args.opts)
+    cfg.freeze()
+
+    student=imagenet_model_dict["MobileNetV2"]
+    teacher=imagenet_model_dict['resnet50']
+    dis=Distiller(student,teacher)
+    dk=IAKD(student,teacher,cfg)
+    x=torch.rand(2,3,32,32)
+    y=torch.tensor([1,0], dtype=torch.long)
+    dk.forward_train(x,y,epoch=30)
